@@ -23,8 +23,9 @@ get_pkt_udp_hdr(struct rte_mbuf* pkt) {
     uint8_t* pkt_data = rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr);
     return (struct udp_hdr*)pkt_data;
 }
-extern int onvm_init(struct onvm_nf_local_ctx *, int);
+extern int onvm_init(struct onvm_nf_local_ctx *, char *);
 extern void onvm_send_pkt(char *, int, struct onvm_nf_local_ctx *);
+extern int onvm_terminate();
 */
 import "C"
 
@@ -32,8 +33,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
-	//"unsafe"
 	"os"
+	"unsafe"
 
 	"gopkg.in/yaml.v2"
 )
@@ -88,7 +89,7 @@ func (conn *OnvmConn) udpHandler() {
 func ListenUDP(network string, laddr *net.UDPAddr) (*OnvmConn, error) {
 	// Read Config
 	dir, _ := os.Getwd()
-	fmt.Printf("Read config from %s/onvmNet/udp.yaml", dir)
+	fmt.Printf("Read config from %s/onvmNet/udp.yaml\n", dir)
 	config := &Config{}
 	if yamlFile, err := ioutil.ReadFile("./onvmNet/udp.yaml"); err != nil {
 		panic(err)
@@ -100,7 +101,11 @@ func ListenUDP(network string, laddr *net.UDPAddr) (*OnvmConn, error) {
 
 	conn := &OnvmConn{}
 
-	C.onvm_init(conn.nf_ctx, C.int(config.ServiceID))
+	onvmConfig := "./onvmNet/onvmConfig.json"
+	cCharOnvmConf := C.CString(onvmConfig)
+	//C.onvm_init(conn.nf_ctx, cCharOnvmConf)
+	fmt.Println("================== After Init =====================")
+	defer C.free(unsafe.Pointer(cCharOnvmConf))
 	//C.onvmInit(conn.nf_ctx, C.int(1))
 
 	pktmbuf_pool = C.rte_mempool_lookup(C.CString("MProc_pktmbuf_pool"))
@@ -120,10 +125,12 @@ func ListenUDP(network string, laddr *net.UDPAddr) (*OnvmConn, error) {
 
 func (conn *OnvmConn) Close() {
 
-	C.onvm_nflib_stop(conn.nf_ctx)
+	//C.onvm_nflib_stop(conn.nf_ctx)
+  C.onvm_terminate()
 
 	fmt.Println("Close onvm UDP")
 }
+
 /*
 func (conn *OnvmConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	var cAddr C.struct_sockaddr_in

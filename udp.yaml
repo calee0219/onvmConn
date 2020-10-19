@@ -1,4 +1,4 @@
-serviceID: 2
+onvmConfig: /home/ubuntu/openNetVM/examples/goConn/config.json
 
 IPIDMap:
   - IP: 192.168.0.1
