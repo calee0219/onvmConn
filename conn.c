@@ -23,7 +23,13 @@ static void __attribute__ ((constructor)) init(void) {
     nf_function_table = onvm_nflib_init_nf_function_table();
     nf_function_table->pkt_handler = &Handler;
 
-    char * cmd[] = {"/home/ubuntu/openNetVM/examples/goConn/build/app/goConn", "-F", "/home/ubuntu/openNetVM/examples/goConn/onvmNet/onvmConfig.json", NULL};
+    //char * cmd[] = {"/home/ubuntu/openNetVM/examples/goConn/build/app/goConn", "-F", "/home/ubuntu/openNetVM/examples/goConn/onvmNet/onvmConfig.json", NULL};
+
+	char cmd0[] = "/home/ubuntu/openNetVM/examples/goConn/build/app/goConn";
+	char cmd1[] = "-F";
+	char cmd2[] = "/home/ubuntu/openNetVM/examples/goConn/onvmNet/onvmConfig.json";
+	//char cmd3[] = NULL;
+    char * cmd[] = {cmd0, cmd1, cmd2, NULL};
     if ((arg_offset = onvm_nflib_init(3, cmd, NF_TAG, nf_local_ctx_all, nf_function_table)) < 0) {
             onvm_nflib_stop(nf_local_ctx_all);
             if (arg_offset == ONVM_SIGNAL_TERMINATION) {
