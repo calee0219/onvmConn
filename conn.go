@@ -18,11 +18,6 @@ package onvmNet
 #include <onvm_nflib.h>
 #include <onvm_pkt_helper.h>
 
-static inline struct udp_hdr*
-get_pkt_udp_hdr(struct rte_mbuf* pkt) {
-    uint8_t* pkt_data = rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr);
-    return (struct udp_hdr*)pkt_data;
-}
 extern int onvm_init(struct onvm_nf_local_ctx *, char *);
 extern void onvm_send_pkt(char *, int, struct onvm_nf_local_ctx *);
 extern int onvm_terminate();
@@ -42,11 +37,27 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-var packetChan = make(chan EthFrame, 10)
-var handToReadChan = make(chan EthFrame, 1)
+//var udpChan = make(chan EthFrame, 1)
+//var handToReadChan = make(chan EthFrame,1)
 var pktmbuf_pool *C.struct_rte_mempool
 var pktCount int
 var config = &Config{} //move config to global
+
+var channelMap = make(map[ConnMeta]chan PktMeta) //map to hanndle each channel of connection
+
+//for each connection
+type ConnMeta struct {
+	ip       string
+	port     int
+	protocol int
+}
+
+type PktMeta struct {
+	srcIp      net.IP
+	srcPort    int
+	payloadLen int     //packet length just include payload after tcpudp
+	payloadPtr *[]byte //the pointer to byte slice of payload
+}
 
 type EthFrame struct {
 	frame     *C.struct_rte_mbuf
@@ -62,9 +73,10 @@ type Config struct {
 }
 
 type OnvmConn struct {
-	laddr   *net.UDPAddr
-	nf_ctx  *C.struct_onvm_nf_local_ctx
-	udpChan chan EthFrame
+	laddr  *net.UDPAddr
+	nf_ctx *C.struct_onvm_nf_local_ctx
+	//udpChan chan EthFrame
+	udpChan chan PktMeta
 }
 
 //export Handler
@@ -72,27 +84,64 @@ func Handler(pkt *C.struct_rte_mbuf, meta *C.struct_onvm_pkt_meta,
 	nf_local_ctx *C.struct_onvm_nf_local_ctx) int32 {
 	pktCount++
 	fmt.Println("packet received!")
+	//	udp_hdr := C.get_pkt_udp_hdr(pkt)
+	/*
+		if udp_hdr.dst_port == 2125 {
+			//udpChan <- EthFrame { pkt, int(C.rte_pktmbuf_data_len(pkt)) }
+			udpChan <- EthFrame{pkt, 5}
+		}
+	*/
+	/********************************************/
+	recvLen := int(C.rte_pktmbuf_data_len(pkt))                                           //length include header??//int(C.rte_pktmbuf_data_len(pkt))
+	buf := C.GoBytes(unsafe.Pointer(C.rte_pktmbuf_mtod(pkt, *C.uint8_t)), C.int(recvLen)) //turn c memory to go memory
+	umsBuf, raddr := unMarshalUDP(buf)
+	udpMeta := ConnMeta{
+		raddr.IP.String(),
+		raddr.Port,
+		17,
+	}
+	pktMeta := PktMeta{
+		raddr.IP,
+		raddr.Port,
+		len(umsBuf),
+		&umsBuf,
+	}
+	channel, ok := channelMap[udpMeta]
+	if ok {
+		channel <- pktMeta
+	} else {
+		//drop packet(?)
+	}
+
 	meta.action = C.ONVM_NF_ACTION_DROP
 
-	//udp_hdr := C.get_pkt_udp_hdr(pkt)
-
-	//if udp_hdr.dst_port == 2125 {
-	//udpChan <- EthFrame { pkt, int(C.rte_pktmbuf_data_len(pkt)) }
-	packetChan <- EthFrame{pkt, 5}
-	//}
 	return 0
 }
 
+//may not use
+/*
 func (conn *OnvmConn) udpHandler() {
 	var relayBuf EthFrame
 	for {
 		select {
-		/* TODO: select if packetChan's etherFrame is UDP */
+		// TODO: select if packetChan's etherFrame is UDP
 		case relayBuf = <-packetChan:
 			fmt.Println("Receive UDP")
 			handToReadChan <- relayBuf
 		}
 	}
+}
+*/
+
+//to regist channel and it connection meta to map
+func (conn *OnvmConn) registerChannel() {
+	udpTuple := ConnMeta{
+		conn.laddr.IP.String(),
+		conn.laddr.Port,
+		17,
+	}
+	conn.udpChan = make(chan PktMeta, 1)
+	channelMap[udpTuple] = conn.udpChan
 }
 
 func ListenUDP(network string, laddr *net.UDPAddr) (*OnvmConn, error) {
@@ -111,6 +160,8 @@ func ListenUDP(network string, laddr *net.UDPAddr) (*OnvmConn, error) {
 	conn := &OnvmConn{}
 	//store local addr
 	conn.laddr = laddr
+	//register
+	conn.registerChannel()
 
 	onvmConfig := "./onvmNet/onvmConfig.json"
 	cCharOnvmConf := C.CString(onvmConfig)
@@ -124,21 +175,28 @@ func ListenUDP(network string, laddr *net.UDPAddr) (*OnvmConn, error) {
 		return nil, fmt.Errorf("pkt alloc from pool failed")
 	}
 
-	go conn.udpHandler()
+	//	go conn.udpHandler() //no use
 	go C.onvm_nflib_run(conn.nf_ctx)
 
 	fmt.Printf("ListenUDP: %s\n", network)
 	return conn, nil
 }
 
-//func (conn * OnvmConn) LocalAddr() (laddr net.Addr) {
-//}
+func (conn *OnvmConn) LocalAddr() net.Addr {
+	laddr := conn.laddr
+	return laddr
+}
 
 func (conn *OnvmConn) Close() {
 
-	//C.onvm_nflib_stop(conn.nf_ctx)
-	C.onvm_terminate()
-
+	C.onvm_nflib_stop(conn.nf_ctx)
+	//deregister channel
+	udpMeta := &ConnMeta{
+		conn.laddr.IP.String(),
+		conn.laddr.Port,
+		17,
+	}
+	delete(channelMap, *udpMeta) //delete from map
 	fmt.Println("Close onvm UDP")
 }
 
@@ -151,19 +209,28 @@ func (conn *OnvmConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	success_send_len = 0 //???ONVM has functon to get it?-->right now onvm_send_pkt return void
 	tempBuffer := marshalUDP(b, addr, conn.laddr)
 	buffer_ptr = getCPtrOfByteData(tempBuffer)
-	C.onvm_send_pkt(buffer_ptr, C.int(ID), conn.nf_ctx) //C.onvm_send_pkt havn't write?
+	C.onvm_send_pkt(buffer_ptr, C.int(ID), conn.nf_ctx, C.int(len(tempBuffer))) //C.onvm_send_pkt havn't write?
 
 	return success_send_len, nil
 }
 
 func (conn *OnvmConn) ReadFromUDP(b []byte) (int, *net.UDPAddr, error) {
-	var ethFame EthFrame
-	ethFame = <-handToReadChan
-	recvLength := ethFame.frame_len
-	header_len := 80 //need to get whole length include layer23
-	buf := C.GoBytes(unsafe.Pointer(ethFame.frame), C.int(recvLength+header_len))
-	umsBuf, raddr := unMarshalUDP(buf)
-	copy(b, umsBuf)
+	/*
+	   	var ethFame EthFrame
+	       ethFame = <- handToReadChan
+	       recvLength := ethFame.frame_len
+	   	header_len := 80//need to get whole length include layer23
+	       buf := C.GoBytes(unsafe.Pointer(ethFame.frame),C.int(recvLength+header_len))
+	       umsBuf,raddr := unMarshalUDP(buf)
+	*/
+	var pktMeta PktMeta
+	pktMeta = <-conn.udpChan
+	recvLength := pktMeta.payloadLen
+	copy(b, *(pktMeta.payloadPtr))
+	raddr := &net.UDPAddr{
+		IP:   pktMeta.srcIp,
+		Port: pktMeta.srcPort,
+	}
 	return recvLength, raddr, nil
 
 }
@@ -237,7 +304,7 @@ func unMarshalUDP(input []byte) (payLoad []byte, rAddr *net.UDPAddr) {
 	ethPacket := gopacket.NewPacket(
 		input,
 		layers.LayerTypeEthernet,
-		gopacket.Default) //this may be type zero copy
+		gopacket.NoCopy) //this may be type zero copy
 
 	ipLayer := ethPacket.Layer(layers.LayerTypeIPv4)
 
