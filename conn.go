@@ -18,9 +18,21 @@ package onvmNet
 #include <onvm_nflib.h>
 #include <onvm_pkt_helper.h>
 
-extern int onvm_init(struct onvm_nf_local_ctx *, char *);
-extern void onvm_send_pkt(char *, int, struct onvm_nf_local_ctx *);
-extern int onvm_terminate();
+static inline struct udp_hdr*
+get_pkt_udp_hdr(struct rte_mbuf* pkt) {
+    uint8_t* pkt_data = rte_pktmbuf_mtod(pkt, uint8_t*) + sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr);
+    return (struct udp_hdr*)pkt_data;
+}
+//wrapper for c macro
+static inline int pktmbuf_data_len_wrapper(struct rte_mbuf* pkt){
+	return rte_pktmbuf_data_len(pkt);
+}
+
+static inline uint8_t* pktmbuf_mtod_wrapper(struct rte_mbuf* pkt){
+	return rte_pktmbuf_mtod(pkt,uint8_t*);
+}
+extern int onvm_init(struct onvm_nf_local_ctx *, int);
+extern void onvm_send_pkt(char *, int, struct onvm_nf_local_ctx *,int);
 */
 import "C"
 
@@ -92,8 +104,8 @@ func Handler(pkt *C.struct_rte_mbuf, meta *C.struct_onvm_pkt_meta,
 		}
 	*/
 	/********************************************/
-	recvLen := int(C.rte_pktmbuf_data_len(pkt))                                           //length include header??//int(C.rte_pktmbuf_data_len(pkt))
-	buf := C.GoBytes(unsafe.Pointer(C.rte_pktmbuf_mtod(pkt, *C.uint8_t)), C.int(recvLen)) //turn c memory to go memory
+	recvLen := int(C.pktmbuf_data_len_wrapper(pkt))                               //length include header??//int(C.rte_pktmbuf_data_len(pkt))
+	buf := C.GoBytes(unsafe.Pointer(C.pktmbuf_mtod_wrapper(pkt)), C.int(recvLen)) //turn c memory to go memory
 	umsBuf, raddr := unMarshalUDP(buf)
 	udpMeta := ConnMeta{
 		raddr.IP.String(),
@@ -206,7 +218,7 @@ func (conn *OnvmConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
 	var ID int
 	//look up table to get id
 	ID = ipToID(addr.IP)
-	success_send_len = 0 //???ONVM has functon to get it?-->right now onvm_send_pkt return void
+	success_send_len = len(b) //???ONVM has functon to get it?-->right now onvm_send_pkt return void
 	tempBuffer := marshalUDP(b, addr, conn.laddr)
 	buffer_ptr = getCPtrOfByteData(tempBuffer)
 	C.onvm_send_pkt(buffer_ptr, C.int(ID), conn.nf_ctx, C.int(len(tempBuffer))) //C.onvm_send_pkt havn't write?
@@ -247,10 +259,12 @@ func ipToID(ip net.IP) (Id int) {
 
 func marshalUDP(b []byte, raddr *net.UDPAddr, laddr *net.UDPAddr) []byte {
 	//interfacebyname may need to modify,not en0
-	ifi, err := net.InterfaceByName("en0")
-	if err != nil {
-		panic(err)
-	}
+	/*
+		ifi ,err :=net.InterfaceByName("en0")
+		if err!=nil {
+			panic(err)
+		}
+	*/
 	buffer := gopacket.NewSerializeBuffer()
 	options := gopacket.SerializeOptions{
 		ComputeChecksums: true,
@@ -258,7 +272,7 @@ func marshalUDP(b []byte, raddr *net.UDPAddr, laddr *net.UDPAddr) []byte {
 	}
 
 	ethlayer := &layers.Ethernet{
-		SrcMAC:       ifi.HardwareAddr,
+		SrcMAC:       net.HardwareAddr{0, 0, 0, 0, 0, 0},
 		DstMAC:       net.HardwareAddr{0, 0, 0, 0, 0, 0},
 		EthernetType: layers.EthernetTypeIPv4,
 	}
@@ -276,7 +290,7 @@ func marshalUDP(b []byte, raddr *net.UDPAddr, laddr *net.UDPAddr) []byte {
 		DstPort: layers.UDPPort(raddr.Port),
 	}
 	udplayer.SetNetworkLayerForChecksum(iplayer)
-	err = gopacket.SerializeLayers(buffer, options,
+	err := gopacket.SerializeLayers(buffer, options,
 		ethlayer,
 		iplayer,
 		udplayer,
