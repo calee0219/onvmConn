@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include "_cgo_export.h"
 
 #define NF_TAG "go-nf"
@@ -11,21 +12,25 @@ static uint8_t d_addr_bytes[ETHER_ADDR_LEN];
 //typedef int GoInt;
 //extern int Handler(struct rte_mbuf*, struct onvm_pkt_meta*, struct onvm_nf_local_ctx*);
 
-int onvm_init(struct onvm_nf_local_ctx *nf_local_ctx, int serviceId) {
+int onvm_init(struct onvm_nf_local_ctx **nf_local_ctx_ptr, int serviceId) {
     int arg_offset;
     struct onvm_nf_function_table *nf_function_table;
 
-    nf_local_ctx = onvm_nflib_init_nf_local_ctx();
-    onvm_nflib_start_signal_handler(nf_local_ctx, NULL);
+    *nf_local_ctx_ptr = onvm_nflib_init_nf_local_ctx();
+    onvm_nflib_start_signal_handler(*nf_local_ctx_ptr, NULL);
 
     nf_function_table = onvm_nflib_init_nf_function_table();
     nf_function_table->pkt_handler = &Handler;
 
     char service_id_str[SERVICE_ID_DIGIT];
     sprintf(service_id_str, "%d", serviceId);
-    char * cmd[2] = {"./go.sh", service_id_str};
-    if ((arg_offset = onvm_nflib_init(2, cmd, NF_TAG, nf_local_ctx, nf_function_table)) < 0) {
-            onvm_nflib_stop(nf_local_ctx);
+    //char * cmd[2] = {"./go.sh", service_id_str};
+	char cmd0[] = "./go.sh";
+	char cmd1[] = "-F";
+	char cmd2[] = "./onvmConfig.json";
+	char * cmd[] = {cmd0, cmd1, cmd2, NULL};
+    if ((arg_offset = onvm_nflib_init(3, cmd, NF_TAG, *nf_local_ctx_ptr, nf_function_table)) < 0) {
+            onvm_nflib_stop(*nf_local_ctx_ptr);
             if (arg_offset == ONVM_SIGNAL_TERMINATION) {
                     printf("Exiting due to user termination\n");
                     return 0;
@@ -37,11 +42,16 @@ int onvm_init(struct onvm_nf_local_ctx *nf_local_ctx, int serviceId) {
     return 0;
 }
 
-void onvm_send_pkt(char * buff, int service_id, struct onvm_nf_local_ctx * ctx) {
+void onvm_send_pkt(char * buff, int service_id, struct onvm_nf_local_ctx * ctx, int buff_length) {
 	uint32_t i;
 	uint32_t pkts_generated;
 	struct rte_mempool *pktmbuf_pool;
+	//int buff_length;
 
+	//char msg[] = "Hello! This is uduck! ";
+	//buff_length = strlen(msg);
+
+	printf("Destination ID: %d\n", service_id);
 	pkts_generated = 0;
 	pktmbuf_pool = rte_mempool_lookup(PKTMBUF_POOL_NAME);
 	if (pktmbuf_pool == NULL) {
@@ -62,7 +72,7 @@ void onvm_send_pkt(char * buff, int service_id, struct onvm_nf_local_ctx * ctx) 
 	}
 
 	/*set up ether header and set new packet size*/
-	ehdr = (struct ether_hdr *)rte_pktmbuf_append(pkt, packet_size);
+	ehdr = (struct ether_hdr *)rte_pktmbuf_append(pkt, buff_length);
 
 	/*using manager mac addr for source
 	 *using input string for dest addr
@@ -80,21 +90,21 @@ void onvm_send_pkt(char * buff, int service_id, struct onvm_nf_local_ctx * ctx) 
 
 	// fill out the meta data of the packet
 	pmeta = onvm_get_pkt_meta(pkt);
-	pmeta->destination = service_id;
+	//pmeta->destination = service_id;
+	pmeta->destination = 2;
 	pmeta->action = ONVM_NF_ACTION_TONF;
 	//pmeta->flags = ONVM_SET_BIT(0, SPEED_TESTER_BIT);
 	//pkt->hash.rss = i;
 	pkt->hash.rss = 0;
 	pkt->port = 0;
-
+    pkt->data_len=buff_length;
 	/* Copy the packet into the rte_mbuf data section */
-	rte_memcpy(rte_pktmbuf_mtod(pkt, char *), buff, sizeof(buff));
+	rte_memcpy(rte_pktmbuf_mtod(pkt, char *), buff, buff_length);
+	//rte_memcpy(rte_pktmbuf_mtod(pkt, char *), msg, buff_length);
 	pkts_generated = 1;
 
 	// send out the generated packet
 	onvm_nflib_return_pkt(ctx->nf, pkt);
-
-
 
 	/* Exit if packets were unexpectedly not created */
 	if (pkts_generated == 0) {
