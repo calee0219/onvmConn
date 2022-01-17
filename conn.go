@@ -48,6 +48,7 @@ import (
 	"strconv"
 	"time"
 	"unsafe"
+	"encoding/binary"
 )
 
 var pktmbuf_pool *C.struct_rte_mempool
@@ -201,6 +202,7 @@ func unMarshalUDP(input []byte) (payLoad []byte, rAddr *ONVMAddr, destAddr *ONVM
 		rIp = ip.SrcIP
 		destIp = ip.DstIP
 	}
+/*
 	udpLayer := ethPacket.Layer(layers.LayerTypeUDP)
 	if udpLayer != nil {
 		udp, _ := udpLayer.(*layers.UDP)
@@ -208,6 +210,15 @@ func unMarshalUDP(input []byte) (payLoad []byte, rAddr *ONVMAddr, destAddr *ONVM
 		destPort = int(udp.DstPort)
 		payLoad = udp.Payload
 	}
+*/
+	//source port 34.35
+	direct_rPort := input[34:36]
+	//destination port 36.37
+	direct_destPort := input[36:38]
+	rPort = int(binary.BigEndian.Uint16(direct_rPort))
+	destPort = int(binary.BigEndian.Uint16(direct_destPort))
+	//payload 42~
+	payLoad = input[42:]
 
 	rAddr = &ONVMAddr{
 		IP:   rIp,
